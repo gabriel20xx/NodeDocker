@@ -11,6 +11,8 @@ fi
 echo "Resetting /app..."
 rm -rf /app
 mkdir /app
+mkdir /input
+mkdir /output
 
 # Clone repo
 echo "Cloning $GIT_REPO into /app..."
