@@ -1,29 +1,26 @@
 #!/bin/bash
 set -e
 
-# Check if GIT_REPO env var is set
+# Check GIT_REPO is set
 if [ -z "$GIT_REPO" ]; then
   echo "Error: GIT_REPO environment variable is not set."
   exit 1
 fi
 
-# Fully clean the /app directory
-echo "Cleaning /app directory..."
+# Completely clean and recreate /app
+echo "Resetting /app..."
 rm -rf /app
 mkdir /app
 
-# Clone the repo into /app
-echo "Cloning repository $GIT_REPO..."
+# Clone repo
+echo "Cloning $GIT_REPO into /app..."
 git clone "$GIT_REPO" /app
 
-echo "Contents of /app after clone:"
-ls -la /app
-
-# Change directory to /app
+# Move into the app
 cd /app
 
 # Install dependencies
-echo "Installing npm dependencies..."
+echo "Installing dependencies..."
 npm install
 
 # Run the app
