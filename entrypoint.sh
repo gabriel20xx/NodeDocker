@@ -11,8 +11,13 @@ fi
 echo "Resetting /app..."
 rm -rf /app
 mkdir -p /app
-mkdir -p /input
-mkdir -p /output
+
+# Recreate input/output with correct ownership and permissions
+echo "Creating /input and /output with uid:gid 99:100 and permissions 777..."
+rm -rf /input /output
+mkdir -p /input /output
+chown -R 99:100 /input /output
+chmod -R 777 /input /output
 
 # Clone repo
 echo "Cloning $GIT_REPO into /app..."
