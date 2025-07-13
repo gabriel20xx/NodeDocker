@@ -16,7 +16,6 @@ chmod -R 777 /app
 
 # Recreate /input and /output with correct ownership and permissions
 echo "Creating /input and /output with uid:gid 99:100 and permissions 777..."
-rm -rf /input /output
 mkdir -p /input /output
 chown -R 99:100 /input /output
 chmod -R 777 /input /output
