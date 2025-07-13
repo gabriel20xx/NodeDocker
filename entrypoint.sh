@@ -10,9 +10,9 @@ fi
 # Completely clean and recreate /app
 echo "Resetting /app..."
 rm -rf /app
-mkdir /app
-mkdir /input
-mkdir /output
+mkdir -p /app
+mkdir -p /input
+mkdir -p /output
 
 # Clone repo
 echo "Cloning $GIT_REPO into /app..."
