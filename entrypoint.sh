@@ -14,12 +14,6 @@ mkdir -p /app
 chown -R 99:100 /app
 chmod -R 777 /app
 
-# Recreate /input and /output with correct ownership and permissions
-echo "Creating /input and /output with uid:gid 99:100 and permissions 777..."
-mkdir -p /input /output
-chown -R 99:100 /input /output
-chmod -R 777 /input /output
-
 # Clone repo
 echo "Cloning $GIT_REPO into /app..."
 git clone "$GIT_REPO" /app
