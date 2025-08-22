@@ -61,19 +61,54 @@ PROJECT_TYPE="${FORCE_PROJECT_TYPE:-}"
 if [ -z "$PROJECT_TYPE" ]; then
   if [ -f "/app/NudeForge/src/services/carousel.js" ] || [ -d "/app/NudeForge/src/public/images/carousel" ]; then
     PROJECT_TYPE="NudeForge"
+    APP_DIR="/app/NudeForge"
   elif [ -f "/app/NudeFlow/src/utils/AppUtils.js" ] || [ -f "/app/NudeFlow/src/app.js" ]; then
     PROJECT_TYPE="NudeFlow"
+    APP_DIR="/app/NudeFlow"
+  elif [ -d "/app/src" ]; then
+    # Repo is the app root directly under /app
+    APP_DIR="/app"
+    # Try to infer type from package.json name (optional)
+    if [ -f "/app/package.json" ]; then
+      PKG_NAME=$(node -e "try{console.log(require('/app/package.json').name||'')}catch{console.log('')}") || PKG_NAME=""
+      case "$PKG_NAME" in
+        nudeforge) PROJECT_TYPE="NudeForge" ;;
+        nudeflow) PROJECT_TYPE="NudeFlow" ;;
+        *) PROJECT_TYPE="Unknown" ;;
+      esac
+    else
+      PROJECT_TYPE="Unknown"
+    fi
+  else
+    PROJECT_TYPE="Unknown"
+    APP_DIR="/app"
+  fi
+else
+  APP_DIR="/app/$PROJECT_TYPE"
+fi
+
+# If a forced project type points to a non-existent app dir but /app/src exists, fall back to /app
+if [ ! -d "$APP_DIR/src" ] && [ -d "/app/src" ]; then
+  echo "[entrypoint] Note: $APP_DIR/src not found; falling back to /app"
+  APP_DIR="/app"
+  # Try to infer type from package.json name (optional)
+  if [ -f "/app/package.json" ]; then
+    PKG_NAME=$(node -e "try{console.log(require('/app/package.json').name||'')}catch{console.log('')}") || PKG_NAME=""
+    case "$PKG_NAME" in
+      nudeforge) PROJECT_TYPE="NudeForge" ;;
+      nudeflow) PROJECT_TYPE="NudeFlow" ;;
+      *) PROJECT_TYPE="Unknown" ;;
+    esac
   else
     PROJECT_TYPE="Unknown"
   fi
 fi
-APP_DIR="/app/$PROJECT_TYPE"
+
 if [ ! -d "$APP_DIR/src" ]; then
-  echo "[entrypoint] Error: Could not locate app directory at $APP_DIR/src" >&2
+  echo "[entrypoint] Warning: Expected src directory not found at $APP_DIR/src; listing /app for diagnostics:" >&2
   ls -la /app || true
-  exit 1
 fi
-echo "[entrypoint] Detected project type: $PROJECT_TYPE"
+echo "[entrypoint] Detected project type: $PROJECT_TYPE (APP_DIR=$APP_DIR)"
 cd "$APP_DIR"
 
 # Ensure environment points to shared source path unless already provided
