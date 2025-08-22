@@ -15,8 +15,13 @@ if [ -z "${PRIMARY_REPO}" ]; then
   echo "Error: PRIMARY_REPO environment variable is not set." >&2
   exit 1
 fi
-# Clone the primary repo directly into /app so that subfolders are /app/NudeForge and /app/NudeFlow
+# Clone target: prefer staging dir when /app already has content that isn't a git repo
 PRIMARY_DIR="/app"
+if [ ! -d "/app/.git" ]; then
+  if [ -n "$(ls -A /app 2>/dev/null || true)" ]; then
+    PRIMARY_DIR="/app/_primary"
+  fi
+fi
 
 if [[ "$PRIMARY_REPO" == git@* ]]; then
   CLONE_METHOD="ssh"
@@ -55,6 +60,85 @@ fi
 
 chown -R 99:100 "$PRIMARY_DIR" || true
 chmod -R 777 "$PRIMARY_DIR" || true
+
+# If we cloned/updated into a staging dir, normalize layout so src lives under /app/<ProjectName>/src for single-app repos
+if [ "$PRIMARY_DIR" != "/app" ]; then
+  if [ -d "$PRIMARY_DIR/NudeForge/src" ] || [ -d "$PRIMARY_DIR/NudeFlow/src" ]; then
+    echo "[entrypoint] Detected monorepo layout in $PRIMARY_DIR; syncing into /app"
+    # Copy everything into /app, preserving structure
+    cp -a "$PRIMARY_DIR"/. /app/
+    rm -rf "$PRIMARY_DIR"
+  elif [ -d "$PRIMARY_DIR/src" ]; then
+    echo "[entrypoint] Detected single-app layout in $PRIMARY_DIR; relocating under /app/<ProjectName>"
+    # Decide destination folder name
+    DEST_NAME="${FORCE_PROJECT_TYPE:-}"
+    if [ -z "$DEST_NAME" ]; then
+      if [ -f "$PRIMARY_DIR/package.json" ]; then
+        DEST_NAME=$(node -e "try{console.log(require(process.argv[1]).name||'')}catch{console.log('')}" "$PRIMARY_DIR/package.json") || DEST_NAME=""
+      fi
+    fi
+    if [ -z "$DEST_NAME" ]; then
+      # Fallback to repo basename
+      BASENAME=$(basename "$PRIMARY_REPO")
+      DEST_NAME=${BASENAME%.git}
+    fi
+    # Sanitize name (no slashes, spaces)
+    DEST_NAME=${DEST_NAME//\//}
+    DEST_NAME=${DEST_NAME// /_}
+    [ -z "$DEST_NAME" ] && DEST_NAME="App"
+    DEST_DIR="/app/$DEST_NAME"
+    echo "[entrypoint] Relocating to $DEST_DIR"
+    rm -rf "$DEST_DIR"
+    mkdir -p "$DEST_DIR"
+    cp -a "$PRIMARY_DIR"/. "$DEST_DIR"/
+    rm -rf "$PRIMARY_DIR"
+    export FORCE_PROJECT_TYPE="$DEST_NAME"
+  else
+    echo "[entrypoint] Warning: No src directory found in $PRIMARY_DIR; syncing contents to /app as-is"
+    cp -a "$PRIMARY_DIR"/. /app/
+    rm -rf "$PRIMARY_DIR"
+  fi
+fi
+
+# If we cloned directly into /app and it's a single-app layout, relocate to /app/<ProjectName>
+if [ "$PRIMARY_DIR" = "/app" ] && [ -d "/app/src" ]; then
+  echo "[entrypoint] Detected single-app layout in /app; relocating under /app/<ProjectName>"
+  DEST_NAME="${FORCE_PROJECT_TYPE:-}"
+  if [ -z "$DEST_NAME" ] && [ -f "/app/package.json" ]; then
+    DEST_NAME=$(node -e "try{console.log(require(process.argv[1]).name||'')}catch{console.log('')}" "/app/package.json") || DEST_NAME=""
+  fi
+  if [ -z "$DEST_NAME" ]; then
+    BASENAME=$(basename "$PRIMARY_REPO")
+    DEST_NAME=${BASENAME%.git}
+  fi
+  DEST_NAME=${DEST_NAME//\//}
+  DEST_NAME=${DEST_NAME// /_}
+  [ -z "$DEST_NAME" ] && DEST_NAME="App"
+  DEST_DIR="/app/$DEST_NAME"
+  echo "[entrypoint] Relocating to $DEST_DIR"
+  rm -rf "$DEST_DIR"
+  mkdir -p "$DEST_DIR"
+  # Copy everything except the destination dir itself (handles dotfiles too)
+  for item in /app/* /app/.*; do
+    base=$(basename "$item")
+    if [ "$base" = "." ] || [ "$base" = ".." ]; then
+      continue
+    fi
+    if [ "$base" = "$(basename "$DEST_DIR")" ]; then
+      continue
+    fi
+    [ -e "$item" ] || continue
+    cp -a "$item" "$DEST_DIR"/
+  done
+  # Remove all except the destination dir
+  for item in /app/* /app/.*; do
+    base=$(basename "$item")
+    if [ "$base" != "$(basename "$DEST_DIR")" ] && [ "$base" != "." ] && [ "$base" != ".." ]; then
+      rm -rf "$item"
+    fi
+  done
+  export FORCE_PROJECT_TYPE="$DEST_NAME"
+fi
 
 # Determine which app to run and enter its directory
 PROJECT_TYPE="${FORCE_PROJECT_TYPE:-}"
