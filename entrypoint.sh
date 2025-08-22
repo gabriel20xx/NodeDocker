@@ -1,5 +1,9 @@
 #!/bin/bash
 set -euo pipefail
+cd / || {
+  echo "[entrypoint] Fatal: cannot cd to root" >&2
+  exit 1
+}
 
 echo "[entrypoint] Starting unified NodeDocker bootstrap"
 
