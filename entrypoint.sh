@@ -4,18 +4,19 @@ set -euo pipefail
 echo "[entrypoint] Starting unified NodeDocker bootstrap"
 
 ### Primary repo clone ###
-if [ -z "${GIT_REPO:-}" ]; then
-  echo "Error: GIT_REPO environment variable is not set." >&2
+# Effective primary repo/branch (new names override legacy)
+PRIMARY_REPO=${PRIMARY_GIT_REPO:-${PRIMARY_REPO:-${GIT_REPO:-}}}
+PRIMARY_BRANCH=${PRIMARY_GIT_BRANCH:-${PRIMARY_BRANCH:-${GIT_BRANCH:-}}}
+if [ -z "${PRIMARY_REPO:-}" ]; then
+  echo "Error: Primary repo not set. Provide PRIMARY_REPO (or legacy GIT_REPO)." >&2
   exit 1
 fi
-
-PRIMARY_BRANCH=${GIT_BRANCH:-}
 # Clone the primary repo directly into /app so that subfolders are /app/NudeForge and /app/NudeFlow
 PRIMARY_DIR="/app"
 
-if [[ "$GIT_REPO" == git@* ]]; then
+if [[ "$PRIMARY_REPO" == git@* ]]; then
   CLONE_METHOD="ssh"
-elif [[ "$GIT_REPO" == https://* ]]; then
+elif [[ "$PRIMARY_REPO" == https://* ]]; then
   CLONE_METHOD="https"
 else
   echo "Error: GIT_REPO must start with https:// or git@" >&2
@@ -23,9 +24,9 @@ else
 fi
 
 if [ "$CLONE_METHOD" = "https" ] && [ -n "${PRIMARY_GIT_TOKEN:-}" ]; then
-  AUTH_REPO=${GIT_REPO/https:\/\//https://$PRIMARY_GIT_TOKEN@}
+  AUTH_REPO=${PRIMARY_REPO/https:\/\//https://$PRIMARY_GIT_TOKEN@}
 else
-  AUTH_REPO="$GIT_REPO"
+  AUTH_REPO="$PRIMARY_REPO"
 fi
 
 echo "[entrypoint] Ensuring $PRIMARY_DIR exists"
@@ -83,32 +84,32 @@ export LORAS_DIR="${LORAS_DIR:-/loras}"
 echo "[entrypoint] Data dirs: INPUT_DIR=$INPUT_DIR OUTPUT_DIR=$OUTPUT_DIR UPLOAD_COPY_DIR=$UPLOAD_COPY_DIR LORAS_DIR=$LORAS_DIR"
 
 ### Shared (secondary) repo clone (NudeShared or custom) ###
-# Environment overrides:
-#   NUDESHARED_REPO (default: https://github.com/gabriel20xx/NudeShared.git)
-#   NUDESHARED_BRANCH (default: master)
+# Environment overrides (new names override legacy):
+#   SECONDARY_REPO or SECONDARY_GIT_REPO (falls back to NUDESHARED_REPO; default: https://github.com/gabriel20xx/NudeShared.git)
+#   SECONDARY_BRANCH or SECONDARY_GIT_BRANCH (falls back to NUDESHARED_BRANCH; default: master)
 #   NUDESHARED_DIR (default: /app/NudeShared/src)
 #   NUDESHARED_SKIP (if set to 'true' skip cloning)
 
 if [ "${NUDESHARED_SKIP:-false}" != "true" ]; then
-  NUDESHARED_REPO=${NUDESHARED_REPO:-"https://github.com/gabriel20xx/NudeShared.git"}
-  NUDESHARED_BRANCH=${NUDESHARED_BRANCH:-"master"}
+  EFFECTIVE_SHARED_REPO=${SECONDARY_GIT_REPO:-${SECONDARY_REPO:-${NUDESHARED_REPO:-"https://github.com/gabriel20xx/NudeShared.git"}}}
+  EFFECTIVE_SHARED_BRANCH=${SECONDARY_GIT_BRANCH:-${SECONDARY_BRANCH:-${NUDESHARED_BRANCH:-"master"}}}
   # Default to /app/NudeShared/src so other code can rely on this path
   NUDESHARED_DIR=${NUDESHARED_DIR:-"/app/NudeShared/src"}
-  echo "[entrypoint] Preparing shared repo (repo=$NUDESHARED_REPO branch=$NUDESHARED_BRANCH dir=$NUDESHARED_DIR)"
+  echo "[entrypoint] Preparing shared repo (repo=$EFFECTIVE_SHARED_REPO branch=$EFFECTIVE_SHARED_BRANCH dir=$NUDESHARED_DIR)"
 
-  AUTH_SHARED="$NUDESHARED_REPO"
-  if [[ "$NUDESHARED_REPO" == https://github.com/* ]] && [[ "$NUDESHARED_REPO" != *"@github.com"* ]] && [ -n "${SECONDARY_GIT_TOKEN:-}" ]; then
-    AUTH_SHARED=${NUDESHARED_REPO/https:\/\//https://$SECONDARY_GIT_TOKEN@}
+  AUTH_SHARED="$EFFECTIVE_SHARED_REPO"
+  if [[ "$EFFECTIVE_SHARED_REPO" == https://github.com/* ]] && [[ "$EFFECTIVE_SHARED_REPO" != *"@github.com"* ]] && [ -n "${SECONDARY_GIT_TOKEN:-}" ]; then
+    AUTH_SHARED=${EFFECTIVE_SHARED_REPO/https:\/\//https://$SECONDARY_GIT_TOKEN@}
   fi
 
   # Ensure parent folder exists (e.g., /app/NudeShared)
   mkdir -p "$(dirname "$NUDESHARED_DIR")"
   if [ ! -d "$NUDESHARED_DIR/.git" ]; then
     echo "[entrypoint] Cloning shared repo into $NUDESHARED_DIR"
-    git clone --depth=1 --branch "$NUDESHARED_BRANCH" "$AUTH_SHARED" "$NUDESHARED_DIR" || echo "[entrypoint] Warning: failed to clone shared repo"
+    git clone --depth=1 --branch "$EFFECTIVE_SHARED_BRANCH" "$AUTH_SHARED" "$NUDESHARED_DIR" || echo "[entrypoint] Warning: failed to clone shared repo"
   else
     echo "[entrypoint] Updating shared repo in $NUDESHARED_DIR"
-    (cd "$NUDESHARED_DIR" && git fetch --depth=1 origin "$NUDESHARED_BRANCH" && git reset --hard "origin/$NUDESHARED_BRANCH" || echo "[entrypoint] Warning: failed to update shared repo")
+    (cd "$NUDESHARED_DIR" && git fetch --depth=1 origin "$EFFECTIVE_SHARED_BRANCH" && git reset --hard "origin/$EFFECTIVE_SHARED_BRANCH" || echo "[entrypoint] Warning: failed to update shared repo")
   fi
 else
   echo "[entrypoint] Skipping shared repo clone (NUDESHARED_SKIP=true)"
