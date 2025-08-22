@@ -88,16 +88,19 @@ export LORAS_DIR="${LORAS_DIR:-/loras}"
 echo "[entrypoint] Data dirs: INPUT_DIR=$INPUT_DIR OUTPUT_DIR=$OUTPUT_DIR UPLOAD_COPY_DIR=$UPLOAD_COPY_DIR LORAS_DIR=$LORAS_DIR"
 
 ### Shared (secondary) repo clone (NudeShared or custom) ###
-# Require explicit SECONDARY_REPO unless NUDESHARED_SKIP=true; branch optional
+# Require explicit SECONDARY_REPO unless SECONDARY_SKIP=true; branch optional
 
-if [ "${NUDESHARED_SKIP:-false}" != "true" ]; then
+if [ "${SECONDARY_SKIP:-false}" != "true" ]; then
   if [ -z "${SECONDARY_REPO:-}" ]; then
-    echo "Error: SECONDARY_REPO environment variable is not set (or set NUDESHARED_SKIP=true)." >&2
+    echo "Error: SECONDARY_REPO environment variable is not set (or set SECONDARY_SKIP=true)." >&2
     exit 1
   fi
   SECONDARY_BRANCH=${SECONDARY_BRANCH:-}
-  # Default to /app/NudeShared/src so other code can rely on this path
-  NUDESHARED_DIR=${NUDESHARED_DIR:-"/app/NudeShared/src"}
+  # Compute shared dir from repo name (override with NUDESHARED_DIR if provided)
+  SHARED_BASENAME=$(basename "${SECONDARY_REPO}")
+  SHARED_NAME=${SHARED_BASENAME%.git}
+  DEFAULT_SHARED_DIR="/app/${SHARED_NAME}/src"
+  NUDESHARED_DIR=${NUDESHARED_DIR:-"$DEFAULT_SHARED_DIR"}
   echo "[entrypoint] Preparing shared repo (repo=$SECONDARY_REPO branch=${SECONDARY_BRANCH:-<default>} dir=$NUDESHARED_DIR)"
 
   AUTH_SHARED="$SECONDARY_REPO"
@@ -121,7 +124,7 @@ if [ "${NUDESHARED_SKIP:-false}" != "true" ]; then
       echo "[entrypoint] Warning: failed to update shared repo"
   fi
 else
-  echo "[entrypoint] Skipping shared repo clone (NUDESHARED_SKIP=true)"
+  echo "[entrypoint] Skipping shared repo clone (SECONDARY_SKIP=true)"
 fi
 
 ### Sync shared assets (theme.css, logger.js) for NudeForge or NudeFlow ###
