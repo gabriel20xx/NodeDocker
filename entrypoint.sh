@@ -22,8 +22,8 @@ else
   exit 1
 fi
 
-if [ "$CLONE_METHOD" = "https" ] && [ -n "${GIT_TOKEN:-}" ]; then
-  AUTH_REPO=${GIT_REPO/https:\/\//https://$GIT_TOKEN@}
+if [ "$CLONE_METHOD" = "https" ] && [ -n "${PRIMARY_GIT_TOKEN:-}" ]; then
+  AUTH_REPO=${GIT_REPO/https:\/\//https://$PRIMARY_GIT_TOKEN@}
 else
   AUTH_REPO="$GIT_REPO"
 fi
@@ -97,8 +97,8 @@ if [ "${NUDESHARED_SKIP:-false}" != "true" ]; then
   echo "[entrypoint] Preparing shared repo (repo=$NUDESHARED_REPO branch=$NUDESHARED_BRANCH dir=$NUDESHARED_DIR)"
 
   AUTH_SHARED="$NUDESHARED_REPO"
-  if [[ "$NUDESHARED_REPO" == https://github.com/* ]] && [[ "$NUDESHARED_REPO" != *"@github.com"* ]] && [ -n "${GITHUB_TOKEN:-}" ]; then
-    AUTH_SHARED=${NUDESHARED_REPO/https:\/\//https://$GITHUB_TOKEN@}
+  if [[ "$NUDESHARED_REPO" == https://github.com/* ]] && [[ "$NUDESHARED_REPO" != *"@github.com"* ]] && [ -n "${SECONDARY_GIT_TOKEN:-}" ]; then
+    AUTH_SHARED=${NUDESHARED_REPO/https:\/\//https://$SECONDARY_GIT_TOKEN@}
   fi
 
   # Ensure parent folder exists (e.g., /app/NudeShared)
