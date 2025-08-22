@@ -28,18 +28,24 @@ else
   AUTH_REPO="$GIT_REPO"
 fi
 
-echo "[entrypoint] Resetting $PRIMARY_DIR"
-rm -rf "$PRIMARY_DIR"/*
+echo "[entrypoint] Ensuring $PRIMARY_DIR exists"
 mkdir -p "$PRIMARY_DIR"
 chown -R 99:100 "/app" || true
 chmod -R 777 "/app" || true
 
-if [ -n "$PRIMARY_BRANCH" ]; then
-  echo "[entrypoint] Cloning primary repo branch '$PRIMARY_BRANCH' into $PRIMARY_DIR..."
-  git clone --depth=1 --branch "$PRIMARY_BRANCH" "$AUTH_REPO" "$PRIMARY_DIR"
+if [ -d "$PRIMARY_DIR/.git" ]; then
+  echo "[entrypoint] Updating existing repo in $PRIMARY_DIR..."
+  (cd "$PRIMARY_DIR" && git fetch --depth=1 origin ${PRIMARY_BRANCH:-} || true && \
+    if [ -n "$PRIMARY_BRANCH" ]; then git reset --hard "origin/$PRIMARY_BRANCH"; else git reset --hard "FETCH_HEAD"; fi) || \
+    echo "[entrypoint] Warning: repo update failed; proceeding with existing contents"
 else
-  echo "[entrypoint] Cloning primary repo default branch into $PRIMARY_DIR..."
-  git clone --depth=1 "$AUTH_REPO" "$PRIMARY_DIR"
+  if [ -n "$PRIMARY_BRANCH" ]; then
+    echo "[entrypoint] Cloning primary repo branch '$PRIMARY_BRANCH' into $PRIMARY_DIR..."
+    git clone --depth=1 --branch "$PRIMARY_BRANCH" "$AUTH_REPO" "$PRIMARY_DIR"
+  else
+    echo "[entrypoint] Cloning primary repo default branch into $PRIMARY_DIR..."
+    git clone --depth=1 "$AUTH_REPO" "$PRIMARY_DIR"
+  fi
 fi
 
 chown -R 99:100 "$PRIMARY_DIR" || true
@@ -68,6 +74,13 @@ cd "$APP_DIR"
 # Ensure environment points to shared source path unless already provided
 export NUDESHARED_DIR="${NUDESHARED_DIR:-/app/NudeShared/src}"
 echo "[entrypoint] Using NUDESHARED_DIR=$NUDESHARED_DIR"
+
+# Default data directories to root-level mounts if not provided
+export INPUT_DIR="${INPUT_DIR:-/input}"
+export OUTPUT_DIR="${OUTPUT_DIR:-/output}"
+export UPLOAD_COPY_DIR="${UPLOAD_COPY_DIR:-/copy}"
+export LORAS_DIR="${LORAS_DIR:-/loras}"
+echo "[entrypoint] Data dirs: INPUT_DIR=$INPUT_DIR OUTPUT_DIR=$OUTPUT_DIR UPLOAD_COPY_DIR=$UPLOAD_COPY_DIR LORAS_DIR=$LORAS_DIR"
 
 ### Shared (secondary) repo clone (NudeShared or custom) ###
 # Environment overrides:
