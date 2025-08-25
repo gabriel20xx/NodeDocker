@@ -1,52 +1,22 @@
+# Generic Node runtime Dockerfile (runtime npm install + git fetch)
 FROM node:lts-slim
+WORKDIR /app
 
-# Install git
-RUN apt-get update && apt-get upgrade -y && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+ENV NODE_ENV=production PORT=8080
 
-# Do NOT use /app as the working dir yet — it will be created fresh later
-WORKDIR /
+# Minimal tools to fetch source at runtime
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Copy the startup script
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Copy shared entrypoint
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-###############################################
-# Environment variables
-# Required
-# - PRIMARY_REPO: Git URL of the primary repo to clone (no default)
-ENV PRIMARY_REPO=""
+# Healthcheck expects the app to expose /health on PORT
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-# Optional (Primary)
-# - PRIMARY_BRANCH: Branch or tag to checkout for primary repo
-# - PRIMARY_TOKEN:  Token for authenticated HTTPS clone of primary repo (set only at runtime; do NOT bake into image)
-ENV PRIMARY_BRANCH=""
-
-# Shared/Secondary (NudeShared or custom)
-# - Set SECONDARY_SKIP=true to skip cloning the secondary repo
-# - SECONDARY_REPO is required unless SECONDARY_SKIP=true
-# - SECONDARY_BRANCH optional; SECONDARY_TOKEN for HTTPS auth (set only at runtime; do NOT bake into image)
-ENV SECONDARY_SKIP="false"
-ENV SECONDARY_REPO=""
-ENV SECONDARY_BRANCH=""
-
-# Standardized locations inside the container
-# NUDESHARED_DIR is derived from SECONDARY_REPO (e.g., /app/<repo-name>/src) unless overridden at runtime
-ENV INPUT_DIR="/input"
-ENV OUTPUT_DIR="/output"
-ENV UPLOAD_COPY_DIR="/copy"
-ENV LORAS_DIR="/loras"
-
-# App/runtime knobs
-ENV FORCE_PROJECT_TYPE=""
-ENV NPM_INSTALL_CMD="npm install"
-ENV BUILD_CMD=""
-ENV START_CMD="npm start"
-ENV REBUILD_SHARP="true"
-ENV SKIP_CAROUSEL_SETUP="false"
-ENV NODE_ENV="production"
-
-# App port
-ENV PORT=8080
-EXPOSE $PORT
-
-ENTRYPOINT ["/entrypoint.sh"]
+EXPOSE 8080
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["npm", "start"]
