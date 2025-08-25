@@ -36,7 +36,6 @@ if [ ! -d node_modules ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
   (npm ci --omit=dev || npm install --omit=dev)
 fi
 
-# Copy shared theme from installed package (optional)
-node -e "const fs=require('fs');try{const src=require.resolve('@gabriel20xx/nude-shared/theme.css');fs.mkdirSync('src/public/css',{recursive:true});fs.copyFileSync(src,'src/public/css/theme.css');console.log('[entrypoint] theme.css copied from package');}catch(e){console.warn('[entrypoint] theme.css copy skipped:', e.message)}"
+# No need to copy theme.css; apps will serve it directly from the npm package
 
 exec "$@"
