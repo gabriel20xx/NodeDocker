@@ -9,14 +9,42 @@ APP_DIR="${APP_DIR:-/app}"
 # Clone repo if package.json not present
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[entrypoint] Cloning application source: $APP_REPO@$APP_REF"
-  AUTH_PREFIX=""
-  if [ -n "$GITHUB_TOKEN" ]; then AUTH_PREFIX="$GITHUB_TOKEN@"; fi
   git init "$APP_DIR"
   cd "$APP_DIR"
-  git remote add origin "https://${AUTH_PREFIX}github.com/${APP_REPO}.git"
-  if ! git fetch --depth 1 origin "$APP_REF"; then
-    echo "[entrypoint] git fetch failed; check APP_REPO/APP_REF or token" >&2
-    exit 1
+  # Always use a clean remote URL (no token in URL to avoid leaking in logs)
+  git remote add origin "https://github.com/${APP_REPO}.git"
+  # Fetch with optional Authorization header when token is provided
+  if [ -n "$GITHUB_TOKEN" ]; then
+    if ! git -c http.extraheader="Authorization: Bearer $GITHUB_TOKEN" fetch --depth 1 origin "$APP_REF"; then
+      # Fallback: try 'main' if default 'master' not found
+      if [ "$APP_REF" = "master" ]; then
+        echo "[entrypoint] fetch failed for 'master'; trying 'main'..." >&2
+        if git -c http.extraheader="Authorization: Bearer $GITHUB_TOKEN" fetch --depth 1 origin main; then
+          APP_REF=main
+        else
+          echo "[entrypoint] git fetch failed; check APP_REPO/APP_REF or token" >&2
+          exit 1
+        fi
+      else
+        echo "[entrypoint] git fetch failed; check APP_REPO/APP_REF or token" >&2
+        exit 1
+      fi
+    fi
+  else
+    if ! git fetch --depth 1 origin "$APP_REF"; then
+      if [ "$APP_REF" = "master" ]; then
+        echo "[entrypoint] fetch failed for 'master'; trying 'main'..." >&2
+        if git fetch --depth 1 origin main; then
+          APP_REF=main
+        else
+          echo "[entrypoint] git fetch failed; check APP_REPO/APP_REF" >&2
+          exit 1
+        fi
+      else
+        echo "[entrypoint] git fetch failed; check APP_REPO/APP_REF" >&2
+        exit 1
+      fi
+    fi
   fi
   git checkout -B runtime-fetch FETCH_HEAD
 else
