@@ -46,7 +46,14 @@ clone_repo() {
 clone_repo "$APP_REPO" "$APP_DIR"
 clone_repo "$SECONDARY_REPO" "$SECONDARY_DIR"
 
-# --- Link shared into app path expected by source imports ---
+# --- Link shared into paths expected by source imports ---
+# Many sources import '../../shared/...', which from /app/<App>/src resolves to /app/shared
+GLOBAL_SHARED_LINK="/app/shared"
+if [ ! -e "$GLOBAL_SHARED_LINK" ]; then
+  ln -s "$SECONDARY_DIR" "$GLOBAL_SHARED_LINK"
+  echo "[entrypoint] Linked shared -> $GLOBAL_SHARED_LINK -> $SECONDARY_DIR"
+fi
+# Keep app-local link too for any relative patterns expecting <app>/shared
 APP_SHARED_LINK="$APP_DIR/shared"
 if [ ! -e "$APP_SHARED_LINK" ]; then
   ln -s "$SECONDARY_DIR" "$APP_SHARED_LINK"
@@ -57,7 +64,11 @@ fi
 cd "$APP_DIR"
 if [ ! -d node_modules ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
   echo "[entrypoint] Installing production dependencies in $APP_DIR ..."
-  (npm ci --omit=dev || npm install --omit=dev)
+  if [ -f package-lock.json ]; then
+    npm ci --omit=dev || npm install --omit=dev
+  else
+    npm install --omit=dev
+  fi
 fi
 
 # --- Export env for app to find secondary directly ---
