@@ -12,13 +12,8 @@ SECONDARY_REPO="${SECONDARY_REPO:-gabriel20xx/NudeShared}"
 SECONDARY_BASENAME="$(echo "$SECONDARY_REPO" | awk -F/ '{print $NF}')"
 SECONDARY_DIR="/app/$SECONDARY_BASENAME"
 
-# GitHub token (required for private repositories)
+# GitHub token (optional; required for private repositories)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
-if [ -z "$GITHUB_TOKEN" ]; then
-  echo "[entrypoint] ERROR: GITHUB_TOKEN is required for cloning private repositories." >&2
-  echo "[entrypoint] Provide it at runtime: -e GITHUB_TOKEN=***" >&2
-  exit 1
-fi
 
 clone_repo() {
   # $1=REPO (owner/name), $2=DIR
@@ -31,14 +26,20 @@ clone_repo() {
   PARENT_DIR="$(dirname "$DIR")"
   mkdir -p "$PARENT_DIR"
   URL="https://github.com/${REPO}.git"
-  AUTH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
-  # Use token in URL (your preferred style)
-  if ! git clone --depth 1 "$AUTH_URL" "$DIR"; then
-    echo "[entrypoint] ERROR: git clone failed for $REPO using token. Ensure the token has repo read access." >&2
-    exit 1
+  if [ -n "$GITHUB_TOKEN" ]; then
+    AUTH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
+    if ! git clone --depth 1 "$AUTH_URL" "$DIR"; then
+      echo "[entrypoint] ERROR: git clone failed for $REPO using token. Ensure the token has repo read access." >&2
+      exit 1
+    fi
+    # Sanitize remote to avoid storing the token in .git/config
+    git -C "$DIR" remote set-url origin "$URL"
+  else
+    if ! git clone --depth 1 "$URL" "$DIR"; then
+      echo "[entrypoint] ERROR: git clone failed for $REPO. If the repo is private, pass -e GITHUB_TOKEN=***" >&2
+      exit 1
+    fi
   fi
-  # Sanitize remote to avoid storing the token in .git/config
-  git -C "$DIR" remote set-url origin "$URL"
 }
 
 # --- Clone Main App & Secondary ---
