@@ -32,10 +32,8 @@ clone_repo() {
   mkdir -p "$PARENT_DIR"
   URL="https://github.com/${REPO}.git"
   AUTH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
-  # Use token in URL (your preferred style) and also forward auth to codeload
-  if ! git \
-    -c http.https://codeload.github.com/.extraheader="Authorization: Bearer $GITHUB_TOKEN" \
-    clone --depth 1 "$AUTH_URL" "$DIR"; then
+  # Use token in URL (your preferred style)
+  if ! git clone --depth 1 "$AUTH_URL" "$DIR"; then
     echo "[entrypoint] ERROR: git clone failed for $REPO using token. Ensure the token has repo read access." >&2
     exit 1
   fi
