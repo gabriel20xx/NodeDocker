@@ -15,6 +15,18 @@ SECONDARY_DIR="/app/$SECONDARY_BASENAME"
 # GitHub token (optional; required for private repositories)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
+# --- Clean previous checkouts (fixed paths) ---
+for TARGET in \
+  "/app/NudeForge" \
+  "/app/NudeFlow" \
+  "/app/NudeShared"
+do
+  if [ -e "$TARGET" ]; then
+    echo "[entrypoint] Removing $TARGET"
+    rm -rf "$TARGET"
+  fi
+done
+
 clone_repo() {
   # $1=REPO (owner/name), $2=DIR
   REPO="$1"; DIR="$2"
