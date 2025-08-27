@@ -31,14 +31,16 @@ clone_repo() {
   PARENT_DIR="$(dirname "$DIR")"
   mkdir -p "$PARENT_DIR"
   URL="https://github.com/${REPO}.git"
-  # Ensure token is sent to both github.com and codeload.github.com (redirect target)
+  AUTH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
+  # Use token in URL (your preferred style) and also forward auth to codeload
   if ! git \
-    -c http.extraheader="Authorization: Bearer $GITHUB_TOKEN" \
     -c http.https://codeload.github.com/.extraheader="Authorization: Bearer $GITHUB_TOKEN" \
-    clone --depth 1 "$URL" "$DIR"; then
+    clone --depth 1 "$AUTH_URL" "$DIR"; then
     echo "[entrypoint] ERROR: git clone failed for $REPO using token. Ensure the token has repo read access." >&2
     exit 1
   fi
+  # Sanitize remote to avoid storing the token in .git/config
+  git -C "$DIR" remote set-url origin "$URL"
 }
 
 # --- Clone Main App & Secondary ---
