@@ -12,8 +12,13 @@ SECONDARY_REPO="${SECONDARY_REPO:-gabriel20xx/NudeShared}"
 SECONDARY_BASENAME="$(echo "$SECONDARY_REPO" | awk -F/ '{print $NF}')"
 SECONDARY_DIR="/app/$SECONDARY_BASENAME"
 
-# GitHub Packages token (optional)
+# GitHub token (required for private repositories)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+if [ -z "$GITHUB_TOKEN" ]; then
+  echo "[entrypoint] ERROR: GITHUB_TOKEN is required for cloning private repositories." >&2
+  echo "[entrypoint] Provide it at runtime: -e GITHUB_TOKEN=***" >&2
+  exit 1
+fi
 
 clone_repo() {
   # $1=REPO (owner/name), $2=DIR
@@ -26,10 +31,13 @@ clone_repo() {
   PARENT_DIR="$(dirname "$DIR")"
   mkdir -p "$PARENT_DIR"
   URL="https://github.com/${REPO}.git"
-  if [ -n "$GITHUB_TOKEN" ]; then
-    git -c http.extraheader="Authorization: Bearer $GITHUB_TOKEN" clone --depth 1 "$URL" "$DIR"
-  else
-    git clone --depth 1 "$URL" "$DIR"
+  # Ensure token is sent to both github.com and codeload.github.com (redirect target)
+  if ! git \
+    -c http.extraheader="Authorization: Bearer $GITHUB_TOKEN" \
+    -c http.https://codeload.github.com/.extraheader="Authorization: Bearer $GITHUB_TOKEN" \
+    clone --depth 1 "$URL" "$DIR"; then
+    echo "[entrypoint] ERROR: git clone failed for $REPO using token. Ensure the token has repo read access." >&2
+    exit 1
   fi
 }
 
