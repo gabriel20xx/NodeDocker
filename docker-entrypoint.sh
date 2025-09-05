@@ -87,13 +87,17 @@ fi
 export SECONDARY_DIR="$SECONDARY_DIR"
 
 # --- Copy theme.css into app public (so /assets/theme.css works) ---
-THEME_SRC="$SECONDARY_DIR/theme.css"
+# Prefer the real client theme file; fall back to root stub if needed
+THEME_SRC="$SECONDARY_DIR/client/theme.css"
+if [ ! -f "$THEME_SRC" ]; then
+  THEME_SRC="$SECONDARY_DIR/theme.css"
+fi
 THEME_DST_DIR="$APP_DIR/src/public/css"
 THEME_DST="$THEME_DST_DIR/theme.css"
 if [ -f "$THEME_SRC" ]; then
   mkdir -p "$THEME_DST_DIR"
   cp "$THEME_SRC" "$THEME_DST"
-  echo "[entrypoint] Synced theme.css to $THEME_DST"
+  echo "[entrypoint] Synced theme.css from $THEME_SRC to $THEME_DST"
 else
   echo "[entrypoint] WARNING: theme.css not found in $SECONDARY_DIR"
 fi

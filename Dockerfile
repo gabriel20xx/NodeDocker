@@ -3,10 +3,11 @@ FROM node:lts-slim
 WORKDIR /app
 
 ENV NODE_ENV=production PORT=8080
+ENV npm_config_python=/usr/bin/python3
 
 # Minimal tools to fetch source at runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends git ca-certificates python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy shared entrypoint
