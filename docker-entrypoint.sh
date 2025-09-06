@@ -19,7 +19,8 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 for TARGET in \
   "/app/NudeForge" \
   "/app/NudeFlow" \
-  "/app/NudeShared"
+  "/app/NudeShared" \
+  "/app/NudeAdmin"
 do
   if [ -e "$TARGET" ]; then
     echo "[entrypoint] Removing $TARGET"
