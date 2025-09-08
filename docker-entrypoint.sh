@@ -90,6 +90,18 @@ if [ -f "$SECONDARY_DIR/package.json" ]; then
     echo "[entrypoint] Installing production dependencies in $SECONDARY_DIR ..."
     (cd "$SECONDARY_DIR"; if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi)
   fi
+  # Safety: ensure critical shared packages exist even if the remote repo still lists them under devDependencies
+  REQUIRED_SECONDARY_PKGS="multer otplib qrcode archiver"
+  MISSING_PKGS=""
+  for P in $REQUIRED_SECONDARY_PKGS; do
+    if [ ! -d "$SECONDARY_DIR/node_modules/$P" ]; then
+      MISSING_PKGS="$MISSING_PKGS $P"
+    fi
+  done
+  if [ -n "$(echo $MISSING_PKGS | tr -d ' ')" ]; then
+    echo "[entrypoint] Detected missing shared runtime packages:$MISSING_PKGS -- installing (fallback)" >&2
+    (cd "$SECONDARY_DIR"; npm install $MISSING_PKGS || true)
+  fi
 fi
 
 # --- Provide a top-level node_modules symlink for sibling resolution (optional) ---
