@@ -84,6 +84,19 @@ if [ ! -d node_modules ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
   fi
 fi
 
+# --- Install secondary (shared) production deps so its ESM imports resolve ---
+if [ -f "$SECONDARY_DIR/package.json" ]; then
+  if [ ! -d "$SECONDARY_DIR/node_modules" ] || [ -z "$(ls -A "$SECONDARY_DIR/node_modules" 2>/dev/null)" ]; then
+    echo "[entrypoint] Installing production dependencies in $SECONDARY_DIR ..."
+    (cd "$SECONDARY_DIR"; if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi)
+  fi
+fi
+
+# --- Provide a top-level node_modules symlink for sibling resolution (optional) ---
+if [ ! -e /app/node_modules ]; then
+  ln -s "$APP_DIR/node_modules" /app/node_modules 2>/dev/null || true
+fi
+
 # --- Export env for app to find secondary directly ---
 export SECONDARY_DIR="$SECONDARY_DIR"
 
