@@ -100,7 +100,28 @@ if [ -f "$SECONDARY_DIR/package.json" ]; then
   done
   if [ -n "$(echo $MISSING_PKGS | tr -d ' ')" ]; then
     echo "[entrypoint] Detected missing shared runtime packages:$MISSING_PKGS -- installing (fallback)" >&2
-    (cd "$SECONDARY_DIR"; npm install $MISSING_PKGS || true)
+    if (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $MISSING_PKGS); then
+      echo "[entrypoint] Installed fallback shared packages successfully." >&2
+    else
+      echo "[entrypoint] WARNING: initial install of fallback packages failed; retrying once..." >&2
+      sleep 2
+      if (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $MISSING_PKGS); then
+        echo "[entrypoint] Fallback retry succeeded." >&2
+      else
+        echo "[entrypoint] ERROR: Failed to install required shared packages ($MISSING_PKGS). Application start may fail." >&2
+      fi
+    fi
+  fi
+  # Final verification for critical packages (otplib, multer, archiver, qrcode)
+  CRITICAL_PKGS="otplib multer archiver qrcode"
+  CRIT_MISSING=""
+  for P in $CRITICAL_PKGS; do
+    [ -d "$SECONDARY_DIR/node_modules/$P" ] || CRIT_MISSING="$CRIT_MISSING $P"
+  done
+  if [ -n "$(echo $CRIT_MISSING | tr -d ' ')" ]; then
+    echo "[entrypoint] ERROR: Critical shared packages still missing after install:$CRIT_MISSING" >&2
+    echo "[entrypoint] Attempting forced install of critical packages..." >&2
+    (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $CRIT_MISSING || true)
   fi
   # Rebuild native better-sqlite3 if present to avoid invalid ELF header when host-compiled modules leak in
   if [ -d "$SECONDARY_DIR/node_modules/better-sqlite3" ]; then
