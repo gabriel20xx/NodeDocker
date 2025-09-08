@@ -102,6 +102,11 @@ if [ -f "$SECONDARY_DIR/package.json" ]; then
     echo "[entrypoint] Detected missing shared runtime packages:$MISSING_PKGS -- installing (fallback)" >&2
     (cd "$SECONDARY_DIR"; npm install $MISSING_PKGS || true)
   fi
+  # Rebuild native better-sqlite3 if present to avoid invalid ELF header when host-compiled modules leak in
+  if [ -d "$SECONDARY_DIR/node_modules/better-sqlite3" ]; then
+    echo "[entrypoint] Rebuilding better-sqlite3 native module for current container architecture..."
+    (cd "$SECONDARY_DIR"; npm rebuild better-sqlite3 --build-from-source || echo "[entrypoint] WARNING: better-sqlite3 rebuild failed; will rely on Postgres if available")
+  fi
 fi
 
 # --- Provide a top-level node_modules symlink for sibling resolution (optional) ---
