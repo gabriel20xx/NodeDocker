@@ -2,6 +2,12 @@
 set -e
 
 # --- Config (minimal) ---
+# Supports transient network issues with retry for git clone.
+# Environment overrides:
+#   CLONE_MAX_ATTEMPTS (default 4)
+#   CLONE_BASE_BACKOFF_MS (default 1500) – exponential backoff multiplier (attempt^2)
+#   CLONE_JITTER_MS (default 400) – random additional sleep up to this many ms
+#   SKIP_REBUILD_BETTER_SQLITE=1 – (optional) skip native rebuild (for debugging only)
 # Main app repo (e.g., gabriel20xx/NudeForge or gabriel20xx/NudeFlow)
 APP_REPO="${APP_REPO:-gabriel20xx/NudeForge}"
 APP_BASENAME="$(echo "$APP_REPO" | awk -F/ '{print $NF}')"
@@ -35,24 +41,51 @@ clone_repo() {
     echo "[entrypoint] Repo already present at $DIR; skipping clone"
     return 0
   fi
-  echo "[entrypoint] Cloning $REPO (default branch) into $DIR"
   PARENT_DIR="$(dirname "$DIR")"
   mkdir -p "$PARENT_DIR"
   URL="https://github.com/${REPO}.git"
-  if [ -n "$GITHUB_TOKEN" ]; then
-    AUTH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
-    if ! git clone --depth 1 "$AUTH_URL" "$DIR"; then
-      echo "[entrypoint] ERROR: git clone failed for $REPO using token. Ensure the token has repo read access." >&2
+  echo "[entrypoint] Cloning $REPO (default branch) into $DIR (with retry)"
+  MAX_ATTEMPTS=${CLONE_MAX_ATTEMPTS:-4}
+  BASE_BACKOFF=${CLONE_BASE_BACKOFF_MS:-1500}
+  JITTER=${CLONE_JITTER_MS:-400}
+  ATTEMPT=1
+  while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+    START_TS=$(date +%s)
+    if [ -n "$GITHUB_TOKEN" ]; then
+      AUTH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
+      git clone --depth 1 "$AUTH_URL" "$DIR" 2>/tmp/git_clone_err.$$ && CLONE_OK=1 || CLONE_OK=0
+      # Sanitize remote if success
+      if [ $CLONE_OK -eq 1 ]; then
+        git -C "$DIR" remote set-url origin "$URL" || true
+      fi
+    else
+      git clone --depth 1 "$URL" "$DIR" 2>/tmp/git_clone_err.$$ && CLONE_OK=1 || CLONE_OK=0
+    fi
+    if [ $CLONE_OK -eq 1 ]; then
+      DURATION=$(( $(date +%s) - START_TS ))
+      echo "[entrypoint] Clone succeeded for $REPO in ${DURATION}s on attempt $ATTEMPT"
+      rm -f /tmp/git_clone_err.$$ 2>/dev/null || true
+      return 0
+    fi
+    ERR_MSG=$(cat /tmp/git_clone_err.$$ 2>/dev/null | tail -n 5)
+    echo "[entrypoint] WARN: clone attempt $ATTEMPT/$MAX_ATTEMPTS failed for $REPO: ${ERR_MSG}" >&2
+    if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+      echo "[entrypoint] ERROR: Exhausted clone attempts for $REPO. Giving up." >&2
       exit 1
     fi
-    # Sanitize remote to avoid storing the token in .git/config
-    git -C "$DIR" remote set-url origin "$URL"
-  else
-    if ! git clone --depth 1 "$URL" "$DIR"; then
-      echo "[entrypoint] ERROR: git clone failed for $REPO. If the repo is private, pass -e GITHUB_TOKEN=***" >&2
-      exit 1
+    # Exponential backoff with jitter (attempt^2 * base + random[0,JITTER])
+    SLEEP_MS=$(( ATTEMPT * ATTEMPT * BASE_BACKOFF ))
+    if [ "$JITTER" -gt 0 ] 2>/dev/null; then
+      RAND_JIT=$(( RANDOM % (JITTER + 1) ))
+    else
+      RAND_JIT=0
     fi
-  fi
+    TOTAL_MS=$(( SLEEP_MS + RAND_JIT ))
+    SEC=$(awk "BEGIN {printf \"%.3f\", ${TOTAL_MS}/1000}")
+    echo "[entrypoint] Retry in ${SEC}s (attempt $(($ATTEMPT+1)) of $MAX_ATTEMPTS)" >&2
+    sleep "$SEC"
+    ATTEMPT=$(( ATTEMPT + 1 ))
+  done
 }
 
 # --- Clone Main App & Secondary ---
@@ -123,12 +156,40 @@ if [ -f "$SECONDARY_DIR/package.json" ]; then
     echo "[entrypoint] Attempting forced install of critical packages..." >&2
     (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $CRIT_MISSING || true)
   fi
-  # Rebuild native better-sqlite3 if present to avoid invalid ELF header when host-compiled modules leak in
-  if [ -d "$SECONDARY_DIR/node_modules/better-sqlite3" ]; then
-    echo "[entrypoint] Rebuilding better-sqlite3 native module for current container architecture..."
-    (cd "$SECONDARY_DIR"; npm rebuild better-sqlite3 --build-from-source || echo "[entrypoint] WARNING: better-sqlite3 rebuild failed; will rely on Postgres if available")
-  fi
 fi
+
+# --- Function: rebuild better-sqlite3 safely (handles host-mounted mismatches) ---
+rebuild_better_sqlite3() {
+  TARGET_DIR="$1"
+  if [ -d "$TARGET_DIR/node_modules/better-sqlite3" ]; then
+    echo "[entrypoint] (better-sqlite3) Ensuring native binary matches container in $TARGET_DIR" >&2
+    (cd "$TARGET_DIR"; npm rebuild better-sqlite3 --build-from-source 2>&1 \
+      || { echo "[entrypoint] WARNING: native rebuild failed in $TARGET_DIR (continuing)" >&2; return 0; })
+  fi
+}
+
+# Always attempt a rebuild for both shared + app (covers pre-existing Windows / host binaries)
+if [ "${SKIP_REBUILD_BETTER_SQLITE:-0}" != "1" ]; then
+  rebuild_better_sqlite3 "$SECONDARY_DIR"
+  rebuild_better_sqlite3 "$APP_DIR"
+else
+  echo "[entrypoint] Skipping better-sqlite3 rebuild due to SKIP_REBUILD_BETTER_SQLITE=1" >&2
+fi
+
+# Lightweight verification: check ELF magic if linux; log advisory if mismatch remains
+verify_better_sqlite3() {
+  TARGET_DIR="$1"
+  NODE_BIN="$TARGET_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+  if [ -f "$NODE_BIN" ] && command -v head >/dev/null 2>&1; then
+    MAGIC=$(head -c 4 "$NODE_BIN" | tr -d '\0')
+    case "$MAGIC" in
+      $'\x7fELF') : ;; # ok
+      *) echo "[entrypoint] WARNING: better_sqlite3.node in $TARGET_DIR does not appear to be an ELF binary (magic: $(printf '%q' "$MAGIC")); signup requiring SQLite may fail. Consider removing host node_modules before starting container." >&2 ;;
+    esac
+  fi
+}
+verify_better_sqlite3 "$SECONDARY_DIR"
+verify_better_sqlite3 "$APP_DIR"
 
 # --- Provide a top-level node_modules symlink for sibling resolution (optional) ---
 if [ ! -e /app/node_modules ]; then
