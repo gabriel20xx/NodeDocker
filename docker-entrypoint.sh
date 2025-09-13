@@ -1,13 +1,25 @@
 #!/bin/sh
 set -e
 
-# --- Config (minimal) ---
-# Supports transient network issues with retry for git clone.
+########################################
+# Runtime Entry Configuration
+# Supports transient network issues with retry for git clone & npm install.
 # Environment overrides:
-#   CLONE_MAX_ATTEMPTS (default 4)
-#   CLONE_BASE_BACKOFF_MS (default 1500) – exponential backoff multiplier (attempt^2)
-#   CLONE_JITTER_MS (default 400) – random additional sleep up to this many ms
-#   SKIP_REBUILD_BETTER_SQLITE=1 – (optional) skip native rebuild (for debugging only)
+#   CLONE_MAX_ATTEMPTS         (default 4)
+#   CLONE_BASE_BACKOFF_MS      (default 1500)
+#   CLONE_JITTER_MS            (default 400)
+#   CLONE_BACKOFF_MODE         (exponential|linear, default exponential)
+#   INSTALL_MAX_ATTEMPTS       (default 3)
+#   INSTALL_BASE_BACKOFF_MS    (default 2000)
+#   INSTALL_BACKOFF_MODE       (exponential|linear, default inherits CLONE_BACKOFF_MODE)
+#   INSTALL_JITTER_MS          (default 300)
+#   JSON_LOG                   (1 enables JSON structured logs)
+#   LOG_LEVEL                  (error|warn|info, default info; in JSON mode filters events)
+#   APP_REF                    (branch, tag, or full/short commit to checkout after clone)
+#   SKIP_REBUILD_BETTER_SQLITE (1 skip native rebuild – debugging only)
+#   SKIP_INSTALL               (1 skip all npm install phases – debugging only)
+# JSON logging line fields: ts, level, event, msg, plus contextual key=value pairs.
+########################################
 # Main app repo (e.g., gabriel20xx/NudeForge or gabriel20xx/NudeFlow)
 APP_REPO="${APP_REPO:-gabriel20xx/NudeForge}"
 APP_BASENAME="$(echo "$APP_REPO" | awk -F/ '{print $NF}')"
@@ -34,20 +46,52 @@ do
   fi
 done
 
+LOG_LEVEL_NORMALIZED=$(printf '%s' "${LOG_LEVEL:-info}" | tr 'A-Z' 'a-z')
+json_should_log_level() {
+  case "$LOG_LEVEL_NORMALIZED" in
+    error) [ "$1" = "ERROR" ] && return 0 || return 1 ;;
+    warn)  [ "$1" = "ERROR" ] || [ "$1" = "WARN" ] && return 0 || return 1 ;;
+    info|*) return 0 ;;
+  esac
+}
+json_log() {
+  LEVEL="$1"; EVENT="$2"; shift 2; MSG="$1"; shift 1
+  if [ "$JSON_LOG" = "1" ]; then
+    UPPER_LEVEL=$(printf '%s' "$LEVEL" | tr 'a-z' 'A-Z')
+    json_should_log_level "$UPPER_LEVEL" || return 0
+    ESC_MSG=$(printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    EXTRAS=""; for KV in "$@"; do
+      K=$(printf '%s' "$KV" | awk -F= '{print $1}')
+      V=$(printf '%s' "$KV" | awk -F= '{print $2}')
+      V_ESC=$(printf '%s' "$V" | sed 's/\\/\\\\/g; s/"/\\"/g')
+      if [ -n "$EXTRAS" ]; then EXTRAS="$EXTRAS, \"$K\": \"$V_ESC\""; else EXTRAS="\"$K\": \"$V_ESC\""; fi
+    done
+    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    if [ -n "$EXTRAS" ]; then
+      printf '{"ts":"%s","level":"%s","event":"%s","msg":"%s",%s}\n' "$TS" "$UPPER_LEVEL" "$EVENT" "$ESC_MSG" "$EXTRAS"
+    else
+      printf '{"ts":"%s","level":"%s","event":"%s","msg":"%s"}\n' "$TS" "$UPPER_LEVEL" "$EVENT" "$ESC_MSG"
+    fi
+  else
+    echo "[entrypoint] $LEVEL $EVENT - $MSG ${*:+($*)}" >&2
+  fi
+}
+
 clone_repo() {
   # $1=REPO (owner/name), $2=DIR
   REPO="$1"; DIR="$2"
   if [ -f "$DIR/package.json" ] || [ -d "$DIR/.git" ]; then
-    echo "[entrypoint] Repo already present at $DIR; skipping clone"
+    json_log INFO clone.skip "Repo already present" dir=$DIR repo=$REPO
     return 0
   fi
   PARENT_DIR="$(dirname "$DIR")"
   mkdir -p "$PARENT_DIR"
   URL="https://github.com/${REPO}.git"
-  echo "[entrypoint] Cloning $REPO (default branch) into $DIR (with retry)"
+  json_log INFO clone.start "Cloning repo" repo=$REPO dir=$DIR
   MAX_ATTEMPTS=${CLONE_MAX_ATTEMPTS:-4}
   BASE_BACKOFF=${CLONE_BASE_BACKOFF_MS:-1500}
   JITTER=${CLONE_JITTER_MS:-400}
+  BACKOFF_MODE=${CLONE_BACKOFF_MODE:-exponential}
   ATTEMPT=1
   while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
     START_TS=$(date +%s)
@@ -63,18 +107,36 @@ clone_repo() {
     fi
     if [ $CLONE_OK -eq 1 ]; then
       DURATION=$(( $(date +%s) - START_TS ))
-      echo "[entrypoint] Clone succeeded for $REPO in ${DURATION}s on attempt $ATTEMPT"
+      json_log INFO clone.success "Clone succeeded" repo=$REPO dir=$DIR attempt=$ATTEMPT max=$MAX_ATTEMPTS durationSec=$DURATION
       rm -f /tmp/git_clone_err.$$ 2>/dev/null || true
+        # If APP_REF is specified, attempt checkout (branch/tag/commit). For commits we deepen fetch to ensure object presence.
+        if [ -n "$APP_REF" ]; then
+          (cd "$DIR"; \
+            if git rev-parse --verify "$APP_REF" >/dev/null 2>&1; then : ; else \
+              git fetch --depth 5 origin "$APP_REF" || git fetch origin "$APP_REF" || true; fi; \
+            if git checkout --quiet "$APP_REF" 2>/tmp/git_checkout_err.$$; then \
+              REF_TYPE=$(git cat-file -t "$APP_REF" 2>/dev/null || echo unknown); \
+              ACTIVE=$(git rev-parse --short HEAD 2>/dev/null || echo none); \
+              json_log INFO clone.ref_checkout "Checked out ref" repo=$REPO ref=$APP_REF type=$REF_TYPE head=$ACTIVE; \
+            else \
+              ERR_CK=$(cat /tmp/git_checkout_err.$$ 2>/dev/null | tr '\n' ' '); \
+              json_log WARN clone.ref_checkout_failed "Failed to checkout ref" repo=$REPO ref=$APP_REF error="$ERR_CK"; \
+            fi )
+        fi
       return 0
     fi
-    ERR_MSG=$(cat /tmp/git_clone_err.$$ 2>/dev/null | tail -n 5)
-    echo "[entrypoint] WARN: clone attempt $ATTEMPT/$MAX_ATTEMPTS failed for $REPO: ${ERR_MSG}" >&2
+  ERR_MSG=$(cat /tmp/git_clone_err.$$ 2>/dev/null | tail -n 5 | tr '\n' ' ')
+    json_log WARN clone.retry "Clone attempt failed" repo=$REPO dir=$DIR attempt=$ATTEMPT max=$MAX_ATTEMPTS error="${ERR_MSG}"
     if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-      echo "[entrypoint] ERROR: Exhausted clone attempts for $REPO. Giving up." >&2
+      json_log ERROR clone.exhausted "Exhausted clone attempts" repo=$REPO dir=$DIR attempt=$ATTEMPT max=$MAX_ATTEMPTS
       exit 1
     fi
-    # Exponential backoff with jitter (attempt^2 * base + random[0,JITTER])
-    SLEEP_MS=$(( ATTEMPT * ATTEMPT * BASE_BACKOFF ))
+    # Backoff with jitter
+    if [ "$BACKOFF_MODE" = "linear" ]; then
+      SLEEP_MS=$(( ATTEMPT * BASE_BACKOFF ))
+    else
+      SLEEP_MS=$(( ATTEMPT * ATTEMPT * BASE_BACKOFF ))
+    fi
     if [ "$JITTER" -gt 0 ] 2>/dev/null; then
       RAND_JIT=$(( RANDOM % (JITTER + 1) ))
     else
@@ -82,7 +144,7 @@ clone_repo() {
     fi
     TOTAL_MS=$(( SLEEP_MS + RAND_JIT ))
     SEC=$(awk "BEGIN {printf \"%.3f\", ${TOTAL_MS}/1000}")
-    echo "[entrypoint] Retry in ${SEC}s (attempt $(($ATTEMPT+1)) of $MAX_ATTEMPTS)" >&2
+    json_log INFO clone.backoff "Sleeping before retry" repo=$REPO dir=$DIR attempt=$ATTEMPT nextAttempt=$((ATTEMPT+1)) sleepSec=$SEC backoffMode=$BACKOFF_MODE
     sleep "$SEC"
     ATTEMPT=$(( ATTEMPT + 1 ))
   done
@@ -106,22 +168,58 @@ if [ ! -e "$APP_SHARED_LINK" ]; then
   echo "[entrypoint] Linked shared -> $APP_SHARED_LINK -> $SECONDARY_DIR"
 fi
 
-# --- Install app production deps (omit dev) ---
-cd "$APP_DIR"
-if [ ! -d node_modules ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
-  echo "[entrypoint] Installing production dependencies in $APP_DIR ..."
-  if [ -f package-lock.json ]; then
-    npm ci --omit=dev || npm install --omit=dev
+install_with_retry() {
+  TARGET_DIR="$1"; LABEL="$2"
+  MAX_ATTEMPTS=${INSTALL_MAX_ATTEMPTS:-3}
+  BASE_BACKOFF=${INSTALL_BASE_BACKOFF_MS:-2000}
+  JITTER=${INSTALL_JITTER_MS:-300}
+  BACKOFF_MODE=${INSTALL_BACKOFF_MODE:-${CLONE_BACKOFF_MODE:-exponential}}
+  ATTEMPT=1
+  while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+    START_TS=$(date +%s)
+    (cd "$TARGET_DIR"; if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi) && OK=1 || OK=0
+    if [ $OK -eq 1 ]; then
+      DURATION=$(( $(date +%s) - START_TS ))
+      json_log INFO install.success "Install succeeded" dir=$TARGET_DIR label=$LABEL attempt=$ATTEMPT max=$MAX_ATTEMPTS durationSec=$DURATION backoffMode=$BACKOFF_MODE
+      return 0
+    fi
+    if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+      json_log ERROR install.exhausted "Install failed after retries" dir=$TARGET_DIR label=$LABEL attempt=$ATTEMPT max=$MAX_ATTEMPTS
+      return 1
+    fi
+    if [ "$BACKOFF_MODE" = "linear" ]; then
+      SLEEP_MS=$(( ATTEMPT * BASE_BACKOFF ))
+    else
+      SLEEP_MS=$(( ATTEMPT * ATTEMPT * BASE_BACKOFF ))
+    fi
+    if [ "$JITTER" -gt 0 ] 2>/dev/null; then RAND_JIT=$(( RANDOM % (JITTER + 1) )); else RAND_JIT=0; fi
+    TOTAL_MS=$(( SLEEP_MS + RAND_JIT ))
+    SEC=$(awk "BEGIN {printf \"%.3f\", ${TOTAL_MS}/1000}")
+    json_log WARN install.retry "Install attempt failed" dir=$TARGET_DIR label=$LABEL attempt=$ATTEMPT max=$MAX_ATTEMPTS sleepSec=$SEC backoffMode=$BACKOFF_MODE
+    sleep "$SEC"
+    ATTEMPT=$(( ATTEMPT + 1 ))
+  done
+}
+
+if [ "${SKIP_INSTALL:-0}" = "1" ]; then
+  json_log WARN install.skip "Skipping dependency installation due to SKIP_INSTALL=1"
+else
+  cd "$APP_DIR"
+  if [ ! -d node_modules ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
+    json_log INFO install.start "Installing production dependencies" dir=$APP_DIR label=app
+    install_with_retry "$APP_DIR" app || json_log ERROR install.app_failed "App install ultimately failed" dir=$APP_DIR
   else
-    npm install --omit=dev
+    json_log INFO install.detect "Existing node_modules detected (app)" dir=$APP_DIR
   fi
 fi
 
 # --- Install secondary (shared) production deps so its ESM imports resolve ---
-if [ -f "$SECONDARY_DIR/package.json" ]; then
+if [ -f "$SECONDARY_DIR/package.json" ] && [ "${SKIP_INSTALL:-0}" != "1" ]; then
   if [ ! -d "$SECONDARY_DIR/node_modules" ] || [ -z "$(ls -A "$SECONDARY_DIR/node_modules" 2>/dev/null)" ]; then
-    echo "[entrypoint] Installing production dependencies in $SECONDARY_DIR ..."
-    (cd "$SECONDARY_DIR"; if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi)
+    json_log INFO install.start "Installing shared production dependencies" dir=$SECONDARY_DIR label=shared
+    install_with_retry "$SECONDARY_DIR" shared || json_log ERROR install.shared_failed "Shared install ultimately failed" dir=$SECONDARY_DIR
+  else
+    json_log INFO install.detect "Existing node_modules detected (shared)" dir=$SECONDARY_DIR
   fi
   # Safety: ensure critical shared packages exist even if the remote repo still lists them under devDependencies
   REQUIRED_SECONDARY_PKGS="multer otplib qrcode archiver"
@@ -132,16 +230,16 @@ if [ -f "$SECONDARY_DIR/package.json" ]; then
     fi
   done
   if [ -n "$(echo $MISSING_PKGS | tr -d ' ')" ]; then
-    echo "[entrypoint] Detected missing shared runtime packages:$MISSING_PKGS -- installing (fallback)" >&2
+    json_log WARN install.missing_pkgs "Installing missing shared runtime packages" dir=$SECONDARY_DIR pkgs="$(echo $MISSING_PKGS | tr -s ' ')"
     if (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $MISSING_PKGS); then
-      echo "[entrypoint] Installed fallback shared packages successfully." >&2
+      json_log INFO install.missing_done "Installed missing shared packages" dir=$SECONDARY_DIR
     else
-      echo "[entrypoint] WARNING: initial install of fallback packages failed; retrying once..." >&2
+      json_log WARN install.missing_retry "Missing package install failed – retrying once" dir=$SECONDARY_DIR
       sleep 2
       if (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $MISSING_PKGS); then
-        echo "[entrypoint] Fallback retry succeeded." >&2
+        json_log INFO install.missing_retry_success "Missing packages retry succeeded" dir=$SECONDARY_DIR
       else
-        echo "[entrypoint] ERROR: Failed to install required shared packages ($MISSING_PKGS). Application start may fail." >&2
+        json_log ERROR install.missing_failed "Failed installing required shared packages" dir=$SECONDARY_DIR pkgs="$(echo $MISSING_PKGS | tr -s ' ')"
       fi
     fi
   fi
@@ -152,8 +250,8 @@ if [ -f "$SECONDARY_DIR/package.json" ]; then
     [ -d "$SECONDARY_DIR/node_modules/$P" ] || CRIT_MISSING="$CRIT_MISSING $P"
   done
   if [ -n "$(echo $CRIT_MISSING | tr -d ' ')" ]; then
-    echo "[entrypoint] ERROR: Critical shared packages still missing after install:$CRIT_MISSING" >&2
-    echo "[entrypoint] Attempting forced install of critical packages..." >&2
+    json_log ERROR install.critical_missing "Critical shared packages missing after install" dir=$SECONDARY_DIR pkgs="$(echo $CRIT_MISSING | tr -s ' ')"
+    json_log WARN install.critical_force "Attempting forced install of critical packages" dir=$SECONDARY_DIR
     (cd "$SECONDARY_DIR"; npm install --no-audit --no-fund $CRIT_MISSING || true)
   fi
 fi
@@ -162,9 +260,9 @@ fi
 rebuild_better_sqlite3() {
   TARGET_DIR="$1"
   if [ -d "$TARGET_DIR/node_modules/better-sqlite3" ]; then
-    echo "[entrypoint] (better-sqlite3) Ensuring native binary matches container in $TARGET_DIR" >&2
+    json_log INFO sqlite.rebuild "Rebuilding better-sqlite3" dir=$TARGET_DIR
     (cd "$TARGET_DIR"; npm rebuild better-sqlite3 --build-from-source 2>&1 \
-      || { echo "[entrypoint] WARNING: native rebuild failed in $TARGET_DIR (continuing)" >&2; return 0; })
+      || { json_log WARN sqlite.rebuild_failed "better-sqlite3 rebuild failed (continuing)" dir=$TARGET_DIR; return 0; })
   fi
 }
 
@@ -173,7 +271,7 @@ if [ "${SKIP_REBUILD_BETTER_SQLITE:-0}" != "1" ]; then
   rebuild_better_sqlite3 "$SECONDARY_DIR"
   rebuild_better_sqlite3 "$APP_DIR"
 else
-  echo "[entrypoint] Skipping better-sqlite3 rebuild due to SKIP_REBUILD_BETTER_SQLITE=1" >&2
+  json_log WARN sqlite.skip_rebuild "Skipping better-sqlite3 rebuild (SKIP_REBUILD_BETTER_SQLITE=1)"
 fi
 
 # Lightweight verification: check ELF magic if linux; log advisory if mismatch remains
@@ -184,12 +282,15 @@ verify_better_sqlite3() {
     MAGIC=$(head -c 4 "$NODE_BIN" | tr -d '\0')
     case "$MAGIC" in
       $'\x7fELF') : ;; # ok
-      *) echo "[entrypoint] WARNING: better_sqlite3.node in $TARGET_DIR does not appear to be an ELF binary (magic: $(printf '%q' "$MAGIC")); signup requiring SQLite may fail. Consider removing host node_modules before starting container." >&2 ;;
+      *) json_log WARN sqlite.binary_mismatch "Binary not ELF (possible host mismatch)" dir=$TARGET_DIR magic=$(printf '%q' "$MAGIC") ;;
     esac
   fi
 }
 verify_better_sqlite3 "$SECONDARY_DIR"
 verify_better_sqlite3 "$APP_DIR"
+
+# Final readiness event before handing off to CMD
+json_log INFO runtime.ready "Entrypoint initialization complete" appDir=$APP_DIR sharedDir=$SECONDARY_DIR repo=$APP_REPO ref=${APP_REF:-default} driverHint=${DATABASE_URL:+postgres}
 
 # --- Provide a top-level node_modules symlink for sibling resolution (optional) ---
 if [ ! -e /app/node_modules ]; then
@@ -210,9 +311,9 @@ THEME_DST="$THEME_DST_DIR/theme.css"
 if [ -f "$THEME_SRC" ]; then
   mkdir -p "$THEME_DST_DIR"
   cp "$THEME_SRC" "$THEME_DST"
-  echo "[entrypoint] Synced theme.css from $THEME_SRC to $THEME_DST"
+  json_log INFO theme.copy "Synced theme.css" src=$THEME_SRC dst=$THEME_DST
 else
-  echo "[entrypoint] WARNING: theme.css not found in $SECONDARY_DIR"
+  json_log WARN theme.missing "theme.css not found" dir=$SECONDARY_DIR
 fi
 
 exec "$@"
